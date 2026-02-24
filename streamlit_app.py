@@ -4,74 +4,94 @@ from FinMind.data import DataLoader
 from datetime import datetime, timedelta
 import time
 
-st.set_page_config(page_title="籌碼精準掃描", layout="wide")
-st.title("🛡️ 專業版：籌碼動向雷達 (修正顯示邏輯)")
+st.set_page_config(page_title="0050 籌碼雷達", layout="wide")
 
+# --- 介面頂部：選股邏輯說明 ---
+st.title("📡 0050 成分股：籌碼動向雷達")
+with st.expander("ℹ️ 點擊查看選股邏輯與篩選範圍", expanded=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        ### 🔍 篩選邏輯
+        1. **券資比 < 30%**：
+           - 代表市場放空力道弱，缺乏「軋空」動能。
+           - 若股價下跌，較無空頭回補的支撐。
+        2. **法人賣超 (近 3 日合計)**：
+           - 三大法人（外資、投信、自營商）呈現淨賣出狀態。
+           - 代表聰明錢正撤離該標的。
+        """)
+    with col2:
+        st.markdown("""
+        ### 🎯 篩選範圍
+        - **元大台灣 50 (0050)**：
+           - 包含台灣市值最大的 50 檔公司。
+           - 這些股票流動性最高，是法人主要進出的戰場。
+        """)
+
+# --- 初始化 API ---
 dl = DataLoader()
-
-# 設定抓取範圍：確保包含過去兩週
 end_dt = datetime.now().strftime('%Y-%m-%d')
 start_dt = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
 
-# 擴充名單到 20 檔，增加篩選到股票的機率
-popular_stocks = [
-    "2330", "2317", "2454", "2308", "2382", "2303", "2603", "2609", 
-    "3231", "6669", "2357", "2881", "2882", "2886", "2301", "2408"
-]
+if st.button("🚀 開始全自動掃描 0050 成分股"):
+    try:
+        with st.spinner('正在獲取 0050 最新成分股名單...'):
+            # 自動抓取 0050 成分股
+            df_0050 = dl.taiwan_stock_holding_shares(
+                stock_id='0050', 
+                start_date=(datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+            )
+            # 取得最新的成分股清單
+            latest_date = df_0050['date'].max()
+            stock_list = df_0050[df_0050['date'] == latest_date]['holding_stock_id'].unique().tolist()
+            # 確保只取前 50 檔（排除現金等）
+            stock_list = [s for s in stock_list if len(s) == 4][:50]
+        
+        st.write(f"✅ 已成功抓取 **{len(stock_list)}** 檔成分股名單 (基準日: {latest_date})")
 
-if st.button("🚀 開始掃描"):
-    results = []
-    bar = st.progress(0)
-    
-    for i, sid in enumerate(popular_stocks):
-        try:
-            # 1. 抓取資料
-            df_m = dl.taiwan_stock_margin_purchase_short_sale(stock_id=sid, start_date=start_dt, end_date=end_dt)
-            df_i = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=start_dt, end_date=end_dt)
-            
-            # 2. 處理資券資料 (找最近一筆不為 0 的)
-            if df_m is not None and not df_m.empty:
-                # 篩選掉 Margin_Purchase_Balance 為 0 的日子
-                valid_m = df_m[df_m['Margin_Purchase_Balance'] > 0]
+        results = []
+        bar = st.progress(0)
+        status = st.empty()
+        
+        for i, sid in enumerate(stock_list):
+            status.text(f"正在分析第 {i+1}/50 檔：{sid}")
+            try:
+                # 抓取資券與法人資料
+                df_m = dl.taiwan_stock_margin_purchase_short_sale(stock_id=sid, start_date=start_dt, end_date=end_dt)
+                df_i = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=start_dt, end_date=end_dt)
                 
-                if not valid_m.empty:
-                    m_row = valid_m.iloc[-1]
-                    ss = m_row.get('Short_Sale_Balance', 0)
-                    mp = m_row.get('Margin_Purchase_Balance', 1)
-                    short_ratio = (ss / mp) * 100
-                    m_date = m_row.get('date', '')
-                else:
-                    # 如果真的找不到非 0 資料，就給它最新的一筆（即使是 0）
-                    m_row = df_m.iloc[-1]
-                    short_ratio = 0
-                    m_date = m_row.get('date', '無資料')
-            else:
-                short_ratio = 0
-                m_date = "N/A"
+                if df_m is not None and not df_m.empty and df_i is not None and not df_i.empty:
+                    # 抓取最近一筆有意義的資券數字
+                    valid_m = df_m[df_m['Margin_Purchase_Balance'] > 0]
+                    if not valid_m.empty:
+                        m_row = valid_m.iloc[-1]
+                        short_ratio = (m_row['Short_Sale_Balance'] / m_row['Margin_Purchase_Balance']) * 100
+                        m_date = m_row['date']
+                    else:
+                        short_ratio, m_date = 0, "無資料"
 
-            # 3. 處理法人資料
-            if df_i is not None and not df_i.empty:
-                inst_recent = df_i.tail(3)
-                net_buy = inst_recent['buy'].sum() - inst_recent['sell'].sum()
-            else:
-                net_buy = 0
+                    # 計算法人近 3 日合計
+                    net_buy = df_i.tail(3)['buy'].sum() - df_i.tail(3)['sell'].sum()
+                    
+                    # 篩選條件
+                    if short_ratio < 30 and net_buy < 0:
+                        results.append({
+                            "代號": sid,
+                            "資券日期": m_date,
+                            "券資比": f"{round(short_ratio, 2)}%",
+                            "法人賣超 (張)": int(abs(net_buy)//1000)
+                        })
+                time.sleep(0.1)
+            except:
+                continue
+            bar.progress((i + 1) / len(stock_list))
 
-            # 4. 判斷條件：只要券資比 < 30% 且 法人賣超 (不再強制券資比要 > 0)
-            if short_ratio < 30 and net_buy < 0:
-                results.append({
-                    "代號": sid,
-                    "券資比日期": m_date,
-                    "券資比": f"{round(short_ratio, 2)}%",
-                    "法人買賣(3日)": f"賣超 {int(abs(net_buy)//1000)} 張"
-                })
-            
-            time.sleep(0.1)
-        except:
-            continue
-        bar.progress((i + 1) / len(popular_stocks))
+        status.empty()
+        if results:
+            st.warning(f"🔍 掃描完成！符合「籌碼偏弱」條件的股票如下：")
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
+        else:
+            st.success("🎉 掃描完成！0050 成分股目前籌碼面尚無集體轉弱跡象。")
 
-    if results:
-        st.warning(f"🔍 掃描完成！符合條件股票（券資比 < 30% 且 法人賣超）：")
-        st.table(pd.DataFrame(results))
-    else:
-        st.info("🎉 目前名單內無符合條件的股票。可能是法人轉為買超，或是券資比突然大幅攀升。")
+    except Exception as e:
+        st.error(f"系統發生錯誤: {e}")
