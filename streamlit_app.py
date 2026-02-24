@@ -55,3 +55,4 @@ try:
 
 except Exception as e:
     st.error(f"發生意外錯誤: {e}")
+ st.write(df_margin.head())
