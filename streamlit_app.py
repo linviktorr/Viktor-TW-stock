@@ -52,4 +52,31 @@ if st.button("🚀 開始掃描熱門股"):
                     short_ratio = (ss / mp) * 100
                     
                     # 法人近期買賣 (最近 3 天合計)
-                    inst_sum = df_i.tail(3)['buy'].sum() - df_i.
+                    inst_sum = df_i.tail(3)['buy'].sum() - df_i.tail(3)['sell'].sum()
+                    
+                    # 篩選條件
+                    if short_ratio < 30 and inst_sum < 0:
+                        results.append({
+                            "排名": i + 1,
+                            "代號": sid,
+                            "券資比": f"{round(short_ratio, 2)}%",
+                            "法人買賣超": f"{int(inst_sum // 1000)} 張",
+                            "今日成交量": f"{int(top_50.iloc[i]['Trading_Volume'] // 1000)} 張"
+                        })
+                
+                time.sleep(0.1) # 避免 API 壓力過大
+            except:
+                continue
+            
+            bar.progress((i + 1) / 50)
+
+        status_text.text("✅ 掃描完成！")
+
+        if results:
+            st.warning(f"💡 在前 50 名熱門股中，有 {len(results)} 檔符合「籌碼轉弱」條件：")
+            st.table(pd.DataFrame(results))
+        else:
+            st.success("🎉 前 50 名熱門股中，目前沒有股票符合籌碼轉弱條件（代表法人未集體撤出）。")
+
+    except Exception as e:
+        st.error(f"掃描過程中出錯: {e}")
