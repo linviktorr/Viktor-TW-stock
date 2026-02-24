@@ -46,7 +46,7 @@ if st.button("🚀 開始精準掃描"):
                     net_buy = 0
 
                 # 3. 判斷條件：券資比 < 30% 且 法人賣超
-                if 0 < short_ratio < 30 and net_buy < 0:
+                if 0 < short_ratio < 50 and net_buy < 0:
                     results.append({
                         "代號": sid,
                         "資料日期": data_date,
