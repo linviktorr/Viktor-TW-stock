@@ -4,80 +4,96 @@ from FinMind.data import DataLoader
 from datetime import datetime, timedelta
 import time
 
-st.set_page_config(page_title="記憶體強勢軋空雷達", layout="wide")
-
-st.title("📈 記憶體產業：強勢軋空雷達")
+st.set_page_config(page_title="記憶體籌碼全掃描", layout="wide")
 
 # --- 介面說明 ---
-with st.expander("ℹ️ 選股邏輯說明", expanded=True):
+st.title("💾 記憶體產業：籌碼全方位雷達")
+
+with st.expander("ℹ️ 選股邏輯說明 (多頭導向)", expanded=True):
     st.markdown("""
-    - **強勢軋空**：券資比 > 30% 且 法人買超。
-    - **資料修正**：若今日資券尚未更新，系統將自動追溯至前一交易日。
+    **本工具篩選【法人買超】之標的，並依「券資比」分為兩大類：**
+    1. **強勢軋空區 (券資比 > 30%)**：大戶買進 + 空頭受壓，最具噴發潛力。
+    2. **穩健佈局區 (券資比 < 30%)**：大戶買進 + 散戶未進場，適合中長線觀察。
+    - *若今日資券尚未更新，系統會自動追溯至最新有資料的交易日。*
     """)
 
 dl = DataLoader()
-# 增加抓取天數，確保跨過週末與空窗期
+# 抓取過去 30 天資料確保穩定
 end_dt = datetime.now().strftime('%Y-%m-%d')
 start_dt = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
 
-stocks_memory = ["2408", "2344", "2337", "3260", "8299", "3006", "4967", "6239", "8110", "2451"]
+# 記憶體族群核心名單
+stocks_memory = [
+    "2408", "2344", "2337", "3260", "8299", 
+    "3006", "4967", "6239", "8110", "2451",
+    "3532", "6485", "5289"
+]
 
-if st.button("🚀 開始深度掃描"):
-    res_both, res_margin, res_inst = [], [], []
-    bar = st.progress(0)
-    status = st.empty()
+if st.button("🚀 開始全維度掃描"):
+    res_high_margin = [] # 條件 A: 券資比 > 30% & 法人買超
+    res_low_margin = []  # 條件 B: 券資比 < 30% & 法人買超
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
     for i, sid in enumerate(stocks_memory):
-        status.text(f"分析中: {sid}")
+        status_text.text(f"分析中 ({i+1}/{len(stocks_memory)}): {sid}")
         try:
-            # 1. 抓取資料
+            # 1. 抓取資券與法人
             df_m = dl.taiwan_stock_margin_purchase_short_sale(stock_id=sid, start_date=start_dt, end_date=end_dt)
             df_i = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=start_dt, end_date=end_dt)
             
-            # 2. 核心修正：找出「最近一個」融資餘額大於 0 的日期
-            if df_m is not None and not df_m.empty:
+            if df_m is not None and not df_m.empty and df_i is not None and not df_i.empty:
+                # 取得最近一筆「非零」的資券資料 (自動追溯機制)
                 valid_m = df_m[df_m['Margin_Purchase_Balance'] > 0]
-                if not valid_m.empty:
-                    m_row = valid_m.iloc[-1] # 這就是最近有資券數據的那天
-                    ss = m_row.get('Short_Sale_Balance', 0)
-                    mp = m_row.get('Margin_Purchase_Balance', 1)
-                    short_ratio = round((ss / mp) * 100, 2)
-                    m_date = m_row['date']
-                else:
-                    short_ratio, m_date = 0, "無有效資券"
-            else:
-                short_ratio, m_date = 0, "連線錯誤"
-
-            # 3. 法人買賣超 (取最後 3 筆有資料的加總)
-            if df_i is not None and not df_i.empty:
-                net_buy = int(df_i.tail(3)['buy'].sum() - df_i.tail(3)['sell'].sum()) // 1000
-            else:
-                net_buy = 0
-
-            # 4. 分類邏輯 (強勢多頭)
-            data_item = {"代號": sid, "券資比": f"{short_ratio}%", "法人買超(張)": net_buy, "資券日期": m_date}
-            
-            if short_ratio > 30 and net_buy > 0:
-                res_both.append(data_item)
-            elif short_ratio > 30:
-                res_margin.append(data_item)
-            elif net_buy > 0:
-                res_inst.append(data_item)
+                m_row = valid_m.iloc[-1] if not valid_m.empty else df_m.iloc[-1]
                 
+                ss = m_row.get('Short_Sale_Balance', 0)
+                mp = m_row.get('Margin_Purchase_Balance', 1)
+                short_ratio = round((ss / mp) * 100, 2)
+                
+                # 法人買賣合計 (近 3 日)
+                net_buy = int((df_i.tail(3)['buy'].sum() - df_i.tail(3)['sell'].sum()) // 1000)
+                
+                # 統一多頭前提：法人必須是買超 (net_buy > 0)
+                if net_buy > 0:
+                    data_item = {
+                        "代號": sid,
+                        "券資比": f"{short_ratio}%",
+                        "法人買超(張)": net_buy,
+                        "資券日期": m_row['date']
+                    }
+                    
+                    if short_ratio >= 30:
+                        res_high_margin.append(data_item)
+                    else:
+                        res_low_margin.append(data_item)
+            
             time.sleep(0.1)
-        except Exception as e:
+        except:
             continue
-        bar.progress((i + 1) / len(stocks_memory))
+        progress_bar.progress((i + 1) / len(stocks_memory))
 
-    status.empty()
-    t1, t2, t3 = st.tabs(["🔥 強勢軋空", "📈 高券資比", "💎 法人買超"])
-    
-    with t1:
-        if res_both: st.table(pd.DataFrame(res_both))
-        else: st.info("目前無雙重符合標的")
-    with t2:
-        if res_margin: st.dataframe(pd.DataFrame(res_margin))
-        else: st.write("無高券資比標的")
-    with t3:
-        if res_inst: st.dataframe(pd.DataFrame(res_inst))
-        else: st.write("無法人買超標的")
+    status_text.empty()
+
+    # --- 顯示結果 ---
+    tab1, tab2 = st.tabs(["🔥 強勢軋空區 (券資比 > 30%)", "🛡️ 穩健佈局區 (券資比 < 30%)"])
+
+    with tab1:
+        st.subheader("大戶買進 + 空頭待宰")
+        if res_high_margin:
+            st.success(f"發現 {len(res_high_margin)} 檔具備軋空動能")
+            st.table(pd.DataFrame(res_high_margin))
+        else:
+            st.info("目前無標的同時符合「法人買超」且「券資比 > 30%」。")
+
+    with tab2:
+        st.subheader("大戶買進 + 散戶冷淡")
+        if res_low_margin:
+            st.warning(f"發現 {len(res_low_margin)} 檔法人悄悄吸貨")
+            st.dataframe(pd.DataFrame(res_low_margin).sort_values("法人買超(張)", ascending=False), use_container_width=True)
+        else:
+            st.info("目前無標的符合「法人買超」且「券資比 < 30%」。")
+
+st.divider()
+st.caption("💡 提示：若兩個分頁都沒股票，代表法人近三日對記憶體族群主要持賣出或觀望態度。")
