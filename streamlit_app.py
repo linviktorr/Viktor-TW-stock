@@ -6,47 +6,57 @@ import time
 
 st.set_page_config(page_title="記憶體籌碼分析儀", layout="wide")
 
-st.title("💾 記憶體族群：籌碼動向雷達")
+st.title("💾 記憶體產業：籌碼全維度雷達")
 
 # --- API 登入區 ---
 with st.sidebar:
     st.header("🔑 權限設定")
-    user_token = st.text_input("請輸入 FinMind Token (必填)", type="password")
-    st.info("註冊 FinMind 官網即可免費取得 Token，解決 'data' 報錯問題。")
+    user_token = st.text_input("請輸入 FinMind Token", type="password")
+    st.info("💡 修正：使用 dl.login(token=...) 進行驗證")
 
 # --- 邏輯標註 ---
 with st.expander("📝 選股邏輯說明", expanded=True):
     st.markdown("""
-    - **強勢區**：券資比 > 30%（具軋空動能）。
-    - **穩健區**：券資比 < 30%（籌碼相對安定）。
-    - **核心條件**：皆需搭配 **法人買賣超** 進行觀察。
+    **本頁面將記憶體族群依「券資比」分開列出，並觀測法人動向：**
+    1. **券資比 > 30%**：高券資比，具備潛在軋空動能。
+    2. **券資比 < 30%**：低券資比，籌碼結構較單純。
+    3. **共通核心**：需注意 **法人買賣超** 是否同步轉向。
     """)
 
 dl = DataLoader()
+
+# --- 修正後的登入邏輯 ---
 if user_token:
-    dl.login_token(user_token)
+    try:
+        dl.login(token=user_token) # 這裡修正了方法名稱
+    except Exception as e:
+        st.sidebar.error(f"登入失敗: {e}")
 
 # 記憶體清單
-stocks_memory = ["2408", "2344", "2337", "3260", "8299", "6239", "3006"]
+stocks_memory = ["2408", "2344", "2337", "3260", "8299", "6239", "3006", "4967"]
 
-if st.button("🚀 執行深度掃描"):
+if st.button("🚀 執行強力掃描"):
     if not user_token:
-        st.error("❌ 請先在左側輸入 Token，否則 API 會拒絕連線並顯示 'data' 錯誤。")
+        st.error("❌ 請在左側輸入 FinMind Token。未登入狀態下頻繁抓取會導致 'data' 錯誤。")
     else:
         all_data = []
         progress_bar = st.progress(0)
         status = st.empty()
         
+        # 設定日期
+        end_dt = datetime.now().strftime('%Y-%m-%d')
+        start_dt = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
         for i, sid in enumerate(stocks_memory):
-            status.text(f"正在連線抓取: {sid}...")
+            status.text(f"📡 掃描中: {sid}...")
             try:
-                # 抓取資料並增加檢查
-                df_m = dl.taiwan_stock_margin_purchase_short_sale(stock_id=sid, start_date=(datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
-                df_i = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=(datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d'))
+                # 抓取資券 (Margin) 與 法人 (Institutional)
+                df_m = dl.taiwan_stock_margin_purchase_short_sale(stock_id=sid, start_date=start_dt, end_date=end_dt)
+                df_i = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=start_dt, end_date=end_dt)
                 
-                # 防禦性檢查：確保回傳的是有資料的 DataFrame
+                # 嚴謹檢查：確保回傳的是含有資料的 DataFrame
                 if isinstance(df_m, pd.DataFrame) and not df_m.empty and isinstance(df_i, pd.DataFrame) and not df_i.empty:
-                    # 追溯有效資券
+                    # 追溯最新有意義的資券日期
                     valid_m = df_m[df_m['Margin_Purchase_Balance'] > 0]
                     m_row = valid_m.iloc[-1] if not valid_m.empty else df_m.iloc[-1]
                     
@@ -57,14 +67,13 @@ if st.button("🚀 執行深度掃描"):
                         "代號": sid,
                         "券資比(%)": short_ratio,
                         "法人買賣(張)": net_buy,
-                        "最後更新日期": m_row['date']
+                        "最後日期": m_row['date']
                     })
-                else:
-                    st.warning(f"⚠️ {sid}: API 未回傳有效數據，請確認 Token 是否正確或額度是否用完。")
                 
-                time.sleep(0.5) # 延長間隔避免被封鎖
+                time.sleep(0.3)
             except Exception as e:
-                st.error(f"❌ 抓取 {sid} 時發生預期外錯誤: {e}")
+                # 即使某一檔失敗也繼續執行，不崩潰
+                continue
             
             progress_bar.progress((i + 1) / len(stocks_memory))
 
@@ -73,26 +82,33 @@ if st.button("🚀 執行深度掃描"):
         if all_data:
             df = pd.DataFrame(all_data)
             
-            # --- 依照你的要求：分開顯示券資比大於與小於 30% ---
+            # --- 分開列出邏輯 ---
             st.divider()
-            col1, col2 = st.columns(2)
+            high_col, low_col = st.columns(2)
             
-            with col1:
-                st.subheader("🔥 券資比 > 30% (高能量)")
+            with high_col:
+                st.subheader("🔥 券資比 > 30%")
                 high_df = df[df["券資比(%)"] > 30]
                 if not high_df.empty:
-                    st.dataframe(high_df.sort_values("券資比(%)", ascending=False))
+                    st.table(high_df.sort_values("券資比(%)", ascending=False))
                 else:
-                    st.write("目前無高券資比標的")
+                    st.info("目前無標的券資比 > 30%")
 
-            with col2:
-                st.subheader("❄️ 券資比 < 30% (穩健區)")
+            with low_col:
+                st.subheader("❄️ 券資比 < 30%")
                 low_df = df[df["券資比(%)"] <= 30]
                 if not low_df.empty:
-                    st.dataframe(low_df.sort_values("法人買賣(張)", ascending=False))
+                    st.table(low_df.sort_values("法人買賣(張)", ascending=False))
                 else:
-                    st.write("目前無低券資比標的")
+                    st.info("目前無標的券資比 < 30%")
                     
-            # 加碼顯示法人買超專區
-            st.success("💎 法人買超焦點 (不分券資比)")
-            st.dataframe(df[df["法人買賣(張)"] > 0].sort_values("法人買賣(張)", ascending=False))
+            # 額外分析法人方向
+            st.divider()
+            st.subheader("💎 法人買超焦點 Top 3")
+            top_buy = df[df["法人買賣(張)"] > 0].sort_values("法人買賣(張)", ascending=False).head(3)
+            if not top_buy.empty:
+                st.dataframe(top_buy, use_container_width=True)
+            else:
+                st.warning("⚠️ 法人目前對記憶體族群無明顯買超。")
+        else:
+            st.error("無法抓取到資料。請檢查 Token 是否過期或網路狀態。")
