@@ -5,78 +5,64 @@ from datetime import datetime, timedelta
 import time
 
 st.set_page_config(page_title="熱門股籌碼掃描", layout="wide")
-st.title("🔥 熱門股雷達：成交量前 50 名籌碼分析")
-st.caption("條件：券資比 < 30% 且 法人賣超")
+st.title("🔥 熱門股雷達：成交量前 50 名")
 
 dl = DataLoader()
 
 # 設定日期範圍
-end_dt = datetime.now().strftime('%Y-%m-%d')
-start_dt = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+today_str = datetime.now().strftime('%Y-%m-%d')
+start_str = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
 
-if st.button("🚀 開始掃描熱門股"):
+if st.button("🚀 開始掃描前 50 名熱門股"):
     try:
-        with st.spinner('正在獲取今日行情並排序...'):
-            # 1. 取得今日全市場行情
-            df_ticks = dl.taiwan_stock_daily_adj(
-                start_date=end_dt, 
-                end_date=end_dt
-            )
-            
-            # 若今日尚未收盤或無資料，改抓昨日
+        with st.spinner('抓取今日行情...'):
+            # 1. 抓取今日行情
+            df_ticks = dl.taiwan_stock_daily_adj(start_date=today_str, end_date=today_str)
             if df_ticks is None or df_ticks.empty:
-                yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-                df_ticks = dl.taiwan_stock_daily_adj(start_date=yesterday, end_date=yesterday)
+                # 若今日無資料則抓昨日
+                old_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+                df_ticks = dl.taiwan_stock_daily_adj(start_date=old_date, end_date=old_date)
 
-            # 2. 依照成交量 (Trading_Volume) 排序，取前 50 名
+            # 2. 取成交量前 50 名
             top_50 = df_ticks.sort_values(by='Trading_Volume', ascending=False).head(50)
             top_50_list = top_50['stock_id'].tolist()
 
         results = []
         bar = st.progress(0)
-        status_text = st.empty()
-
+        
         for i, sid in enumerate(top_50_list):
-            status_text.text(f"分析中 ({i+1}/50): {sid}")
-            
             try:
-                # 抓取籌碼資料
-                df_m = dl.taiwan_stock_margin_purchase_short_sale(stock_id=sid, start_date=start_dt, end_date=end_dt)
-                df_i = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=start_dt, end_date=end_dt)
+                # 3. 抓取籌碼
+                df_m = dl.taiwan_stock_margin_purchase_short_sale(stock_id=sid, start_date=start_str, end_date=today_str)
+                df_i = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=start_str, end_date=today_str)
                 
                 if not df_m.empty and not df_i.empty:
                     # 計算券資比
                     m = df_m.iloc[-1]
-                    ss = m.get('Short_Sale_Balance', 0)
-                    mp = m.get('Margin_Purchase_Balance', 1)
-                    short_ratio = (ss / mp) * 100
+                    s_ratio = (m.get('Short_Sale_Balance', 0) / m.get('Margin_Purchase_Balance', 1)) * 100
                     
-                    # 法人近期買賣 (最近 3 天合計)
-                    inst_sum = df_i.tail(3)['buy'].sum() - df_i.tail(3)['sell'].sum()
+                    # 法人買賣超 (最近3天加總)
+                    inst_recent = df_i.tail(3)
+                    net_buy = inst_recent['buy'].sum() - inst_recent['sell'].sum()
                     
-                    # 篩選條件
-                    if short_ratio < 30 and inst_sum < 0:
+                    # 篩選條件：券資比 < 30% 且 法人賣超 (net_buy < 0)
+                    if s_ratio < 30 and net_buy < 0:
                         results.append({
                             "排名": i + 1,
                             "代號": sid,
-                            "券資比": f"{round(short_ratio, 2)}%",
-                            "法人買賣超": f"{int(inst_sum // 1000)} 張",
-                            "今日成交量": f"{int(top_50.iloc[i]['Trading_Volume'] // 1000)} 張"
+                            "券資比": f"{round(s_ratio, 2)}%",
+                            "法人賣超": f"{int(net_buy // 1000)} 張"
                         })
-                
-                time.sleep(0.1) # 避免 API 壓力過大
+                time.sleep(0.1)
             except:
                 continue
-            
             bar.progress((i + 1) / 50)
 
-        status_text.text("✅ 掃描完成！")
-
         if results:
-            st.warning(f"💡 在前 50 名熱門股中，有 {len(results)} 檔符合「籌碼轉弱」條件：")
+            st.warning("⚠️ 以下股票符合「券資比低、法人撤退」條件：")
             st.table(pd.DataFrame(results))
         else:
-            st.success("🎉 前 50 名熱門股中，目前沒有股票符合籌碼轉弱條件（代表法人未集體撤出）。")
+            st.success("🎉 目前熱門股籌碼尚稱穩健。")
 
     except Exception as e:
-        st.error(f"掃描過程中出錯: {e}")
+        st.error(f"掃描失敗: {e}")
